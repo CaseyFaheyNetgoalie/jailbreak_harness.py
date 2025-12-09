@@ -34,7 +34,7 @@ import traceback
 import yaml
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from pathlib import Path
 from tqdm import tqdm
 import argparse
@@ -529,14 +529,14 @@ class JailbreakHarness:
     def _get_timestamped_filename(self, prefix: str, ext: str) -> str:
         """Generates a UTC timestamped filename and caches it."""
         if self._last_export_ts is None:
-            self._last_export_ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+            self._last_export_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         return f"{prefix}_{self._last_export_ts}.{ext}"
 
     def run_variant(
         self, test: TestCase, variant: Variant, run_id: int
     ) -> Dict[str, Any]:
         """Runs a single variant and records the result."""
-        ts = datetime.now(UTC).isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
         temp_value = variant.temperature if variant.temperature is not None else 0.0
 
         try:
