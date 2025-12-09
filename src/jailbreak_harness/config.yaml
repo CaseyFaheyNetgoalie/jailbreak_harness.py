@@ -1,0 +1,17 @@
+# Default configuration for jailbreak harness
+model:
+  name: "gpt-4o"
+  caller_type: "openai"
+  
+execution:
+  seeds: 3
+  temperatures: [0.0, 0.5, 0.7, 1.0]
+  sleep_between_requests: 0.01
+  
+output:
+  prefix: "jailbreak_results"
+  include_timestamp: true
+  
+logging:
+  level: "INFO"
+  file: "jailbreak_harness.log"

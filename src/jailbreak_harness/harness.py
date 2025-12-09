@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from tqdm import tqdm
+import argparse
+
 
 # ---------------- Logging ----------------
 logger = logging.getLogger(__name__)
@@ -452,9 +454,101 @@ TEST_SUITE: List[TestCase] = [
 ]
 
 # ---------------- Main Runner ----------------
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="LLM Jailbreak Testing Harness",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run with mock model (safe testing)
+  python jailbreak_harness.py --model mock
+  
+  # Run against OpenAI GPT-4
+  python jailbreak_harness.py --model gpt-4o --caller openai --seeds 3
+  
+  # Custom test suite and temperatures
+  python jailbreak_harness.py --test-suite custom.yaml --temperatures 0.0,0.5,1.0
+        """
+    )
+    
+    parser.add_argument(
+        '--model', 
+        default='mock-model',
+        help='Model name/identifier (default: mock-model)'
+    )
+    parser.add_argument(
+        '--caller',
+        choices=['mock', 'openai', 'hf'],
+        default='mock',
+        help='Model caller type (default: mock)'
+    )
+    parser.add_argument(
+        '--test-suite',
+        default='test_suite.yaml',
+        help='Path to test suite YAML file (default: test_suite.yaml)'
+    )
+    parser.add_argument(
+        '--seeds',
+        type=int,
+        default=1,
+        help='Number of random seeds to run (default: 1)'
+    )
+    parser.add_argument(
+        '--temperatures',
+        default='0.0,0.7',
+        help='Comma-separated temperature values (default: 0.0,0.7)'
+    )
+    parser.add_argument(
+        '--sleep',
+        type=float,
+        default=0.01,
+        help='Sleep duration between requests in seconds (default: 0.01)'
+    )
+    parser.add_argument(
+        '--output-prefix',
+        default='jailbreak_results',
+        help='Output file prefix (default: jailbreak_results)'
+    )
+    parser.add_argument(
+        '--api-key',
+        help='API key for model caller (or set via environment variable)'
+    )
+    parser.add_argument(
+        '--endpoint',
+        help='Custom API endpoint URL (for HF caller)'
+    )
+    
+    return parser.parse_args()
+
+def load_config(config_path='config.yaml'):
+    """Load configuration from YAML file."""
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    return {}
+
 def main():
     """Main execution function."""
+
+    # --- Parse Arguments
+
+    args = parse_args()
     
+    # Parse temperatures
+    temperatures = [float(t.strip()) for t in args.temperatures.split(',')]
+    
+    # Initialize caller based on type
+    if args.caller == 'mock':
+        caller = MockModelCaller()
+    elif args.caller == 'openai':
+        caller = OpenAIModelCaller(api_key=args.api_key)
+    elif args.caller == 'hf':
+        if not args.endpoint:
+            logger.error("--endpoint required for HF caller")
+            return
+        caller = HFModelCaller(endpoint_url=args.endpoint, api_key=args.api_key)
+   
     # --- Configuration ---
     TEST_SUITE_FILE = "test_suite.yaml"
     FILENAME_PREFIX = "jailbreak_results"
@@ -468,26 +562,26 @@ def main():
     
     try:
         # --- Load Test Suite ---
-        if os.path.exists(TEST_SUITE_FILE):
-            test_suite = load_test_suite_from_file(TEST_SUITE_FILE)
-        else:
-            logger.warning(f"'{TEST_SUITE_FILE}' not found. Using internal fallback TEST_SUITE.")
-            test_suite = TEST_SUITE
-            
+    if os.path.exists(args.test_suite):
+        test_suite = load_test_suite_from_file(args.test_suite)
+    else:
+        logger.warning(f"'{args.test_suite}' not found. Using internal fallback TEST_SUITE.")
+        test_suite = TEST_SUITE
+         
         if not test_suite:
             logger.critical("No test cases loaded. Exiting.")
             return
         # --- End Load Test Suite ---
 
-        harness = JailbreakHarness(model_caller=caller, model_name=model_name)
+        harness = JailbreakHarness(model_caller=caller, model_name=args.model)
         
         logger.info(f"Running tests on model '{model_name}' using {type(caller).__name__}")
         
         # Run 2 seeds, testing temperatures 0.0 and 0.7 for variants that don't specify their own temp
-        harness.run_tests(test_suite, seeds=2, temperatures=[0.0, 0.7], sleep=0.01)
+        harness.run_tests(test_suite, seeds=args.seeds, temperatures=temperatures, sleep=0.01)
         
         # Export results to CSV and JSON with a single, matching timestamp
-        harness.export_all(FILENAME_PREFIX)
+        harness.export_all(args.output_prefix)
         harness.summary()
         
         logger.info("\nLog file saved: ./jailbreak_harness.log")
