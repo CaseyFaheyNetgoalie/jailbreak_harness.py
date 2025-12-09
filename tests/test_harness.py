@@ -296,3 +296,31 @@ class TestReportingAndExport:
 
             # Filenames should match exactly after the prefix
             assert csv_files[0].stem == json_files[0].stem
+
+# Test input validation
+def test_run_tests_empty_tests(mock_caller):
+    harness = JailbreakHarness(mock_caller, "test")
+    with pytest.raises(ValueError, match="No tests provided"):
+        harness.run_tests([])
+
+def test_run_tests_negative_seeds(mock_caller, basic_test_case):
+    harness = JailbreakHarness(mock_caller, "test")
+    with pytest.raises(ValueError, match="seeds must be >= 1"):
+        harness.run_tests([basic_test_case], seeds=-1)
+
+def test_run_tests_negative_sleep(mock_caller, basic_test_case):
+    harness = JailbreakHarness(mock_caller, "test")
+    with pytest.raises(ValueError, match="sleep must be >= 0"):
+        harness.run_tests([basic_test_case], seeds=1, sleep=-1)
+
+def test_variant_invalid_id():
+    with pytest.raises(ValueError, match="Variant id must be"):
+        Variant(id="", prompt="test")
+
+def test_variant_invalid_temperature():
+    with pytest.raises(ValueError, match="Temperature must be numeric"):
+        Variant(id="T1", prompt="test", temperature="high")
+
+def test_testcase_empty_variants():
+    with pytest.raises(ValueError, match="at least one variant"):
+        TestCase(id="T1", name="Test", description="Desc", variants=[])
