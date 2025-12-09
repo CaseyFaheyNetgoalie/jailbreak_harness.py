@@ -1,5 +1,11 @@
 """
-Analyze jailbreak harness results and generate reports.
+Analyze jailbreak harness results and generate reports
+
+Copyright (c) 2025 Casey Fahey
+Licensed under the MIT License - see LICENSE file for details.
+
+Safety-first jailbreak test harness for LLM endpoints.
+
 """
 import pandas as pd
 import argparse
@@ -64,4 +70,4 @@ if __name__ == "__main__":
     parser.add_argument('csv_file', help='Path to results CSV file')
     args = parser.parse_args()
     
-    analyze_results(args.csv_file)
+    analyze_csv(args.csv_file)
