@@ -11,7 +11,7 @@ Purpose:
 Usage:
     1. Create a 'test_suite.yaml' (or use the internal fallback TEST_SUITE).
     2. Choose a model caller: MockModelCaller (default), OpenAIModelCaller, HFModelCaller, or custom.
-    3. Run: python -m jailbreak_harness.harness
+    3. Run: python jailbreak_harness.py
 
 Requirements:
     pip install openai requests tqdm pyyaml
@@ -34,21 +34,25 @@ import traceback
 import yaml
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
+
+# FIX: Import UTC for timezone-aware datetime usage (removes DeprecationWarning)
 from datetime import datetime, UTC
-from pathlib import Path
 from tqdm import tqdm
 import argparse
 
 
 # ---------------- Logging ----------------
 logger = logging.getLogger(__name__)
+# Configure root logger if no handlers are set
 if not logger.hasHandlers():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
-            logging.FileHandler("jailbreak_harness.log", mode="w"),
-            logging.StreamHandler(),
+            logging.FileHandler(
+                "jailbreak_harness.log", mode="w"
+            ),  # Log to file (overwrite)
+            logging.StreamHandler(),  # Log to console
         ],
     )
 
@@ -58,24 +62,8 @@ if not logger.hasHandlers():
 class Variant:
     id: str
     prompt: str
-    system_note: Optional[str] = None
+    system_note: Optional[str] = None  # Aligned with the preferred YAML key
     temperature: Optional[float] = None
-
-    def __post_init__(self):
-        """Validate variant data after initialization."""
-        if not self.id or not isinstance(self.id, str):
-            raise ValueError(f"Variant id must be a non-empty string, got: {self.id}")
-        if not self.prompt or not isinstance(self.prompt, str):
-            raise ValueError(f"Variant prompt must be a non-empty string")
-        if self.temperature is not None:
-            if not isinstance(self.temperature, (int, float)):
-                raise ValueError(
-                    f"Temperature must be numeric, got: {type(self.temperature)}"
-                )
-            if not 0.0 <= self.temperature <= 2.0:
-                logger.warning(
-                    f"Temperature {self.temperature} outside typical range [0.0, 2.0]"
-                )
 
 
 @dataclass
@@ -85,125 +73,70 @@ class TestCase:
     description: str
     variants: List[Variant]
 
-    def __post_init__(self):
-        """Validate test case data after initialization."""
-        if not self.id or not isinstance(self.id, str):
-            raise ValueError(f"TestCase id must be a non-empty string, got: {self.id}")
-        if not self.name or not isinstance(self.name, str):
-            raise ValueError(f"TestCase name must be a non-empty string")
-        if not self.variants or not isinstance(self.variants, list):
-            raise ValueError(f"TestCase must have at least one variant")
-        if not all(isinstance(v, Variant) for v in self.variants):
-            raise ValueError(f"All variants must be Variant instances")
-
 
 # ---------------- Test Suite Loader ----------------
 def load_test_suite_from_file(filepath: str) -> List[TestCase]:
     """
     Loads a test suite from a YAML or JSON file.
     Supports a list at the root or a list under a 'tests' key.
-    
-    Args:
-        filepath: Path to the test suite file
-        
-    Returns:
-        List of TestCase objects
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist
-        ValueError: If file format is invalid
     """
-    filepath_obj = Path(filepath)
-
-    if not filepath_obj.exists():
-        raise FileNotFoundError(f"Test suite file not found: {filepath}")
-
-    if not filepath_obj.is_file():
-        raise ValueError(f"Path is not a file: {filepath}")
-
-    logger.info(f"Loading test suite from {filepath}...")
-
+    logger.info(f"Attempting to load test suite from {filepath}...")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
-        if data is None:
-            raise ValueError("Test suite file is empty")
-
-        # Handle both root list and 'tests' key
+        # Robustly handle structures: root list or list under 'tests' key
         test_list = data.get("tests", data) if isinstance(data, dict) else data
 
         if not isinstance(test_list, list):
             raise ValueError(
-                "Test suite file must contain a top-level list of test cases "
-                "or a 'tests' key containing a list."
+                "Test suite file must contain a top-level list of test cases or a 'tests' key containing a list."
             )
 
-        if not test_list:
-            raise ValueError("Test suite contains no test cases")
-
         test_cases = []
-        for idx, tc_data in enumerate(test_list):
-            try:
-                # Validate required fields
-                required_fields = ["id", "name", "description", "variants"]
-                missing_fields = [f for f in required_fields if f not in tc_data]
-                if missing_fields:
-                    raise KeyError(f"Missing required fields: {missing_fields}")
+        for tc_data in test_list:
+            variants_data = tc_data.get("variants", [])
+            if not variants_data:
+                logger.warning(f"Test case '{tc_data.get('id')}' has no variants.")
 
-                variants_data = tc_data.get("variants", [])
-                if not variants_data:
-                    logger.warning(
-                        f"Test case '{tc_data.get('id')}' has no variants, skipping"
-                    )
-                    continue
-
-                variants = []
-                for v_idx, v_data in enumerate(variants_data):
-                    try:
-                        variant = Variant(
-                            id=v_data["id"],
-                            prompt=v_data["prompt"],
-                            system_note=v_data.get("system_note")
-                            or v_data.get("system_prompt"),
-                            temperature=v_data.get("temperature"),
-                        )
-                        variants.append(variant)
-                    except (KeyError, ValueError) as e:
-                        logger.error(
-                            f"Error in variant {v_idx} of test '{tc_data.get('id')}': {e}"
-                        )
-                        raise
-
-                if not variants:
-                    logger.warning(
-                        f"Test case '{tc_data.get('id')}' has no valid variants, skipping"
-                    )
-                    continue
-
-                test_case = TestCase(
-                    id=tc_data["id"],
-                    name=tc_data["name"],
-                    description=tc_data["description"],
-                    variants=variants,
+            variants = [
+                Variant(
+                    id=v_data["id"],
+                    prompt=v_data["prompt"],
+                    # Gracefully handle both 'system_note' (preferred) and 'system_prompt' (legacy)
+                    system_note=v_data.get("system_note")
+                    or v_data.get("system_prompt"),
+                    temperature=v_data.get("temperature"),
                 )
-                test_cases.append(test_case)
+                for v_data in variants_data
+            ]
 
-            except Exception as e:
-                logger.error(f"Error loading test case at index {idx}: {e}")
-                raise
+            # Note: Extra metadata (category, tags, setup) is not stored directly in the TestCase
+            # dataclass but is available in the result logging if desired.
+            test_case = TestCase(
+                id=tc_data["id"],
+                name=tc_data["name"],
+                description=tc_data["description"],
+                variants=variants,
+            )
+            test_cases.append(test_case)
 
-        if not test_cases:
-            raise ValueError("No valid test cases could be loaded")
-
-        logger.info(f"Successfully loaded {len(test_cases)} test cases from {filepath}")
+        logger.info(
+            f"Successfully loaded {len(test_cases)} total test cases from {filepath}."
+        )
         return test_cases
-
+    except FileNotFoundError:
+        logger.error(f"Test suite file not found: {filepath}")
+        raise
     except yaml.YAMLError as e:
-        logger.error(f"Error parsing YAML file: {filepath}\n{e}")
+        logger.error(f"Error parsing YAML/JSON file: {filepath}\n{e}")
+        raise
+    except KeyError as e:
+        logger.error(f"Missing required key in test suite file '{filepath}': {e}")
         raise
     except Exception as e:
         logger.error(f"Failed to load test suite from {filepath}: {e}")
+        logger.error(traceback.format_exc())
         raise
 
 
@@ -218,24 +151,13 @@ class BaseModelCaller:
         system: Optional[str] = None,
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
-        """
-        Call the model with given parameters.
-        
-        Args:
-            model: Model identifier
-            prompt: User prompt
-            system: Optional system message
-            temperature: Sampling temperature
-            
-        Returns:
-            Dict with keys: 'text', 'tokens', 'safety_flags', 'meta'
-        """
+        """Must return a dictionary with keys: 'text', 'tokens', 'safety_flags', 'meta'."""
         raise NotImplementedError()
 
     def format_error_response(
         self, error_type: str, details: str = ""
     ) -> Dict[str, Any]:
-        """Helper to create a standard error dict."""
+        """Helper to create a standard error dict for the CSV."""
         error_msg = f"ERROR: {error_type}"
         if details:
             error_msg += f" ({details})"
@@ -246,26 +168,12 @@ class BaseModelCaller:
             "meta": {"error": True, "details": details},
         }
 
-    def validate_inputs(self, model: str, prompt: str, temperature: float):
-        """Validate common inputs."""
-        if not model or not isinstance(model, str):
-            raise ValueError("Model must be a non-empty string")
-        if not prompt or not isinstance(prompt, str):
-            raise ValueError("Prompt must be a non-empty string")
-        if not isinstance(temperature, (int, float)):
-            raise ValueError("Temperature must be numeric")
-        if not 0.0 <= temperature <= 2.0:
-            logger.warning(
-                f"Temperature {temperature} outside typical range [0.0, 2.0]"
-            )
-
 
 class MockModelCaller(BaseModelCaller):
     """Deterministic, safe mock for demos or CI testing."""
 
     def __init__(self, seed: int = 42):
         random.seed(seed)
-        self.call_count = 0
 
     def call(
         self,
@@ -274,10 +182,6 @@ class MockModelCaller(BaseModelCaller):
         system: Optional[str] = None,
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
-        """Mock implementation with pattern matching."""
-        self.validate_inputs(model, prompt, temperature)
-        self.call_count += 1
-
         markers = [
             "LAB_OK",
             "NF_OK",
@@ -290,7 +194,7 @@ class MockModelCaller(BaseModelCaller):
         ]
         text = "REFUSE"
         safety_flags = []
-        meta = {"call_count": self.call_count}
+        meta = {}
         lp = (prompt or "").lower()
         ls = (system or "").lower()
 
@@ -299,7 +203,7 @@ class MockModelCaller(BaseModelCaller):
                 text = f"MARKER_DETECTED: {m}"
                 break
         else:
-            # Simple heuristics
+            # simple heuristics
             if any(
                 x in lp
                 for x in [
@@ -321,7 +225,6 @@ class MockModelCaller(BaseModelCaller):
             for x in ["knowledge base", "uploaded file", "summarize the uploaded file"]
         ):
             meta["retrieval_hits"] = [{"doc_id": "doc-1", "score": 0.92}]
-
         return {
             "text": text,
             "tokens": tokens,
@@ -330,29 +233,22 @@ class MockModelCaller(BaseModelCaller):
         }
 
 
+# -------- OpenAI Model Caller --------
 class OpenAIModelCaller(BaseModelCaller):
     """Calls OpenAI API using the v1.0+ client."""
 
-    def __init__(self, api_key: Optional[str] = None, timeout: int = 60):
+    def __init__(self, api_key: Optional[str] = None):
         try:
             import openai
             from openai import OpenAI
         except ImportError:
-            raise RuntimeError(
-                "openai package required. Install with: pip install --upgrade openai"
-            )
+            raise RuntimeError("openai package required. pip install --upgrade openai")
 
         self.openai = openai
-        self.timeout = timeout
         api_key_to_use = api_key or os.getenv("OPENAI_API_KEY")
-
         if not api_key_to_use:
-            raise ValueError(
-                "OPENAI_API_KEY missing. Set via environment variable or pass to constructor."
-            )
-
-        self.client = OpenAI(api_key=api_key_to_use, timeout=timeout)
-        logger.info("OpenAI client initialized successfully")
+            raise ValueError("OPENAI_API_KEY missing or not provided.")
+        self.client = OpenAI(api_key=api_key_to_use)
 
     def call(
         self,
@@ -361,19 +257,13 @@ class OpenAIModelCaller(BaseModelCaller):
         system: Optional[str] = None,
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
-        """Call OpenAI API."""
-        self.validate_inputs(model, prompt, temperature)
-
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        messages = [{"role": "system", "content": system}] if system else []
         messages.append({"role": "user", "content": prompt})
 
         try:
             resp = self.client.chat.completions.create(
                 model=model, messages=messages, temperature=temperature, max_tokens=1024
             )
-
             text = (resp.choices[0].message.content or "").strip()
             tokens = (
                 resp.usage.total_tokens
@@ -381,6 +271,7 @@ class OpenAIModelCaller(BaseModelCaller):
                 else len(text.split()) + len(prompt.split())
             )
 
+            # --- Safety Flag Extraction (OpenAI specific) ---
             safety_flags = []
             if resp.choices[0].finish_reason == "content_filter":
                 safety_flags.append("content_filtered")
@@ -389,6 +280,7 @@ class OpenAIModelCaller(BaseModelCaller):
                 "model_id": resp.model,
                 "finish_reason": resp.choices[0].finish_reason,
             }
+            # --- End Safety Flag Extraction ---
 
             return {
                 "text": text,
@@ -397,51 +289,34 @@ class OpenAIModelCaller(BaseModelCaller):
                 "meta": meta,
             }
 
-        except self.openai.APIConnectionError as e:
-            logger.error(f"API connection failed: {e}")
-            return self.format_error_response("APIConnectionError", str(e))
-        except self.openai.RateLimitError as e:
-            logger.error(f"Rate limit exceeded: {e}")
-            return self.format_error_response("RateLimitError", str(e))
-        except self.openai.AuthenticationError as e:
-            logger.error(f"Authentication failed: {e}")
-            return self.format_error_response("AuthenticationError", str(e))
+        except self.openai.APIConnectionError:
+            return self.format_error_response("APIConnectionError")
+        except self.openai.RateLimitError:
+            return self.format_error_response("RateLimitError")
+        except self.openai.AuthenticationError:
+            return self.format_error_response("AuthenticationError")
         except self.openai.NotFoundError as e:
-            logger.error(f"Model not found: {model}")
             return self.format_error_response("NotFoundError", model)
         except self.openai.APIStatusError as e:
-            logger.error(f"API status error: {e.status_code}")
-            return self.format_error_response(
-                f"APIStatusError_{e.status_code}", str(e)
-            )
+            return self.format_error_response(f"APIStatusError_{e.status_code}")
         except Exception as e:
             logger.exception("OpenAIModelCaller unexpected error")
-            return self.format_error_response(
-                f"UnexpectedError_{type(e).__name__}", str(e)
-            )
+            return self.format_error_response(f"UnexpectedError_{type(e).__name__}")
 
 
+# -------- HuggingFace / Local Endpoint Caller --------
 class HFModelCaller(BaseModelCaller):
     """Calls a generic HTTP endpoint (like HuggingFace Inference)."""
 
-    def __init__(
-        self, endpoint_url: str, api_key: Optional[str] = None, timeout: int = 60
-    ):
+    def __init__(self, endpoint_url: str, api_key: Optional[str] = None):
         try:
             import requests
         except ImportError:
-            raise RuntimeError(
-                "requests package required. Install with: pip install requests"
-            )
-
-        if not endpoint_url or not isinstance(endpoint_url, str):
-            raise ValueError("endpoint_url must be a non-empty string")
-
+            raise RuntimeError("requests package required. pip install requests")
         self.requests = requests
         self.url = endpoint_url
-        self.timeout = timeout
+        # Note: HF_API_KEY environment variable is common for hosted endpoints
         self.api_key = api_key or os.getenv("HF_API_KEY")
-        logger.info(f"HF caller initialized with endpoint: {endpoint_url}")
 
     def call(
         self,
@@ -450,65 +325,42 @@ class HFModelCaller(BaseModelCaller):
         system: Optional[str] = None,
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
-        """Call HuggingFace or custom endpoint."""
-        self.validate_inputs(model, prompt, temperature)
-
+        # NOTE: Model arg is ignored here, as generic HF endpoints typically don't take a model arg.
         full_prompt = f"System: {system}\n\nUser: {prompt}" if system else prompt
         safe_temp = max(0.01, temperature)
-
+        # Using a standard Inference API payload structure
         payload = {
             "inputs": full_prompt,
             "parameters": {"temperature": safe_temp, "max_new_tokens": 512},
         }
-
-        headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
         try:
-            r = self.requests.post(
-                self.url, headers=headers, json=payload, timeout=self.timeout
-            )
+            r = self.requests.post(self.url, headers=headers, json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
 
-            # Extract generated text
-            if isinstance(data, list) and data:
-                text = data[0].get("generated_text", "")
-            elif isinstance(data, dict):
-                text = data.get("generated_text", "")
-            else:
-                text = str(data)
-
-            # Remove prompt echo if present
+            # Extract generated text and remove prompt echo
+            text = (
+                data[0].get("generated_text") if isinstance(data, list) and data else ""
+            )
             if text.startswith(full_prompt):
                 text = text[len(full_prompt) :].strip()
 
             tokens = len(text.split()) + len(full_prompt.split())
-
-            return {
-                "text": text,
-                "tokens": tokens,
-                "safety_flags": [],
-                "meta": {"status_code": r.status_code},
-            }
+            return {"text": text, "tokens": tokens, "safety_flags": [], "meta": {}}
 
         except self.requests.exceptions.HTTPError as e:
-            logger.exception(f"HF HTTP error: {e.response.status_code}")
-            return self.format_error_response(
-                f"HTTPError_{e.response.status_code}", str(e)
-            )
-        except self.requests.exceptions.Timeout as e:
-            logger.error(f"Request timeout after {self.timeout}s")
-            return self.format_error_response("TimeoutError", str(e))
+            # IMPROVEMENT: Use logger.exception for full traceback
+            logger.exception(f"HFModelCaller HTTPError: {e.response.status_code}")
+            return self.format_error_response(f"HTTPError_{e.response.status_code}")
         except self.requests.exceptions.RequestException as e:
-            logger.exception(f"HF request exception: {e}")
-            return self.format_error_response(
-                f"RequestException_{type(e).__name__}", str(e)
-            )
-        except Exception as e:
-            logger.exception("HF caller unexpected error")
-            return self.format_error_response("UnexpectedError_HF", str(e))
+            # IMPROVEMENT: Use logger.exception for full traceback
+            logger.exception(f"HFModelCaller RequestException: {e}")
+            return self.format_error_response(f"RequestException_{type(e).__name__}")
+        except Exception:
+            logger.exception("HFModelCaller unexpected error")
+            return self.format_error_response(f"UnexpectedError_HF")
 
 
 # ---------------- Harness ----------------
@@ -516,19 +368,17 @@ class JailbreakHarness:
     """Core harness to run test cases against a model caller."""
 
     def __init__(self, model_caller: BaseModelCaller, model_name: str = "mock-model"):
-        if not isinstance(model_caller, BaseModelCaller):
-            raise TypeError("model_caller must be an instance of BaseModelCaller")
-        if not model_name or not isinstance(model_name, str):
-            raise ValueError("model_name must be a non-empty string")
-
         self.model_caller = model_caller
         self.model_name = model_name
         self.results: List[Dict[str, Any]] = []
-        self._last_export_ts: Optional[str] = None
+        self._last_export_ts: Optional[
+            str
+        ] = None  # Stores timestamp for consistent exports
 
     def _get_timestamped_filename(self, prefix: str, ext: str) -> str:
-        """Generates a UTC timestamped filename and caches it."""
+        """Generates a UTC timestamped filename and caches it for multiple exports."""
         if self._last_export_ts is None:
+            # FIX: Use datetime.now(UTC) to eliminate DeprecationWarning
             self._last_export_ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         return f"{prefix}_{self._last_export_ts}.{ext}"
 
@@ -536,7 +386,10 @@ class JailbreakHarness:
         self, test: TestCase, variant: Variant, run_id: int
     ) -> Dict[str, Any]:
         """Runs a single variant and records the result."""
+        # FIX: Use timezone-aware isoformat() to eliminate DeprecationWarning
         ts = datetime.now(UTC).isoformat()
+
+        # Determine the temperature for this specific run (should always be set by run_tests)
         temp_value = variant.temperature if variant.temperature is not None else 0.0
 
         try:
@@ -547,11 +400,14 @@ class JailbreakHarness:
                 temperature=temp_value,
             )
         except Exception as e:
-            logger.exception(f"Model caller failed internally")
+            logger.exception(
+                f"Model caller {type(self.model_caller).__name__} failed internally"
+            )
             resp = self.model_caller.format_error_response(
-                f"CallerInternalError_{type(e).__name__}", str(e)
+                f"CallerInternalError_{type(e).__name__}"
             )
 
+        # Create a unified result record
         record = {
             "run_id": run_id,
             "test_id": test.id,
@@ -564,13 +420,13 @@ class JailbreakHarness:
             "response": resp.get("text"),
             "tokens": resp.get("tokens"),
             "safety_flags": ",".join(resp.get("safety_flags", [])),
+            # Handle complex JSON fields for CSV/TSV export
             "retrieval_hits": json.dumps(
                 resp.get("meta", {}).get("retrieval_hits", [])
             ),
             "meta": json.dumps(resp.get("meta", {})),
             "timestamp": ts,
         }
-
         self.results.append(record)
         return record
 
@@ -581,33 +437,19 @@ class JailbreakHarness:
         temperatures: Optional[List[float]] = None,
         sleep: float = 0.0,
     ) -> List[Dict[str, Any]]:
-        """Runs a full test suite with seeds and temperature variations."""
-        # Input validation
-        if not tests:
-            raise ValueError("No tests provided")
-        if seeds < 1:
-            raise ValueError("seeds must be >= 1")
-        if sleep < 0:
-            raise ValueError("sleep must be >= 0")
-
+        """Runs a full test suite, handling seeds and temperature variations."""
         temperatures_to_run = temperatures or [0.0]
-
-        # Validate temperatures
-        for temp in temperatures_to_run:
-            if not isinstance(temp, (int, float)):
-                raise ValueError(f"All temperatures must be numeric, got: {temp}")
-            if not 0.0 <= temp <= 2.0:
-                logger.warning(
-                    f"Temperature {temp} outside typical range [0.0, 2.0]"
-                )
-
         run_id = 0
+
+        # Reset timestamp for a fresh run
         self._last_export_ts = None
 
         # Flatten all test variants with effective temperature
         variant_runs: List[Tuple[TestCase, Variant]] = []
         for t in tests:
             for v in t.variants:
+                # Determine the set of temperatures to run for this specific variant
+                # Use variant's temp if set, otherwise use the sweep temperatures
                 run_temps = (
                     [v.temperature]
                     if v.temperature is not None
@@ -615,6 +457,7 @@ class JailbreakHarness:
                 )
 
                 for temp in run_temps:
+                    # Create a new Variant instance with the resolved temperature
                     variant_runs.append(
                         (
                             t,
@@ -627,22 +470,18 @@ class JailbreakHarness:
                         )
                     )
 
-        total_runs = len(variant_runs) * seeds
-        logger.info(f"Starting test run: {total_runs} total executions")
-
         for seed in range(seeds):
             random.seed(seed)
-            logger.info(f"--- Seed {seed + 1}/{seeds} ---")
+            logger.info(f"--- Starting test run with seed {seed} ---")
 
+            # Run all variants for this seed with a progress bar
             for t, variant in tqdm(
-                variant_runs, desc=f"Seed {seed + 1}/{seeds}", unit="test"
+                variant_runs, desc=f"Running variants (seed {seed})", unit="test"
             ):
                 run_id += 1
                 self.run_variant(t, variant, run_id)
-                if sleep > 0:
+                if sleep:
                     time.sleep(sleep)
-
-        logger.info(f"Completed {run_id} test executions")
         return self.results
 
     def save_csv(self, filename_prefix: str = "jailbreak_results"):
@@ -652,8 +491,11 @@ class JailbreakHarness:
             return
 
         filename_relative = self._get_timestamped_filename(filename_prefix, "csv")
+
+        # FIX: Use os.path.join to ensure file is saved to CWD (or mocked CWD)
         filename = os.path.join(os.getcwd(), filename_relative)
 
+        # Define strict order for common CSV columns
         csv_fields = [
             "run_id",
             "test_id",
@@ -671,6 +513,7 @@ class JailbreakHarness:
             "meta",
         ]
 
+        # Add any other keys that might exist, sorted, at the end
         extra_keys = sorted(
             set().union(*(r.keys() for r in self.results)) - set(csv_fields)
         )
@@ -678,9 +521,7 @@ class JailbreakHarness:
 
         try:
             with open(filename, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(
-                    f, fieldnames=all_fields, extrasaction="ignore"
-                )
+                writer = csv.DictWriter(f, fieldnames=all_fields)
                 writer.writeheader()
                 writer.writerows(self.results)
             logger.info(f"Saved {len(self.results)} results to CSV: {filename}")
@@ -695,10 +536,13 @@ class JailbreakHarness:
             return
 
         filename_relative = self._get_timestamped_filename(filename_prefix, "json")
+
+        # FIX: Use os.path.join to ensure file is saved to CWD (or mocked CWD)
         filename = os.path.join(os.getcwd(), filename_relative)
 
         try:
             with open(filename, "w", encoding="utf-8") as f:
+                # Dump the results list directly
                 json.dump(self.results, f, indent=2)
             logger.info(f"Saved {len(self.results)} results to JSON: {filename}")
         except IOError as e:
@@ -707,21 +551,17 @@ class JailbreakHarness:
 
     def export_all(self, filename_prefix: str = "jailbreak_results"):
         """Convenience method: saves both CSV and JSON with matching timestamps."""
+        # Note: _get_timestamped_filename is called in save_csv/save_json
+        # and ensures consistency via self._last_export_ts cache.
         self.save_csv(filename_prefix)
         self.save_json(filename_prefix)
 
     def summary(self):
         """Logs a brief summary of test results to the console."""
-        if not self.results:
-            logger.info("No results to summarize")
-            return
-
         by_test = {}
-        total_runs = len(self.results)
-        safety_triggered = 0
-        errors = 0
-
+        total_runs = 0
         for r in self.results:
+            total_runs += 1
             tid = r["test_id"]
             by_test.setdefault(
                 tid,
@@ -729,36 +569,22 @@ class JailbreakHarness:
             )
             by_test[tid]["runs"] += 1
             by_test[tid]["unique_responses"].add(r["response"])
-
+            # SAFETY_FLAGS: check if the string contains any safety flags (which are comma-separated)
             if r.get("safety_flags"):
                 by_test[tid]["safety_flags"] += 1
-                safety_triggered += 1
             if "ERROR:" in r["response"]:
                 by_test[tid]["errors"] += 1
-                errors += 1
 
-        logger.info("\n" + "=" * 60)
-        logger.info("TEST RUN SUMMARY")
-        logger.info("=" * 60)
-        logger.info(f"Model: {self.model_name}")
-        logger.info(f"Total executions: {total_runs}")
-        logger.info(f"Unique tests: {len(by_test)}")
-        logger.info(
-            f"Safety flags triggered: {safety_triggered} ({safety_triggered/total_runs*100:.1f}%)"
-        )
-        logger.info(f"Errors encountered: {errors} ({errors/total_runs*100:.1f}%)")
-
-        logger.info("\n--- Per-Test Summary ---")
-        for tid, info in sorted(by_test.items()):
+        logger.info("\n--- Summary (per test) ---")
+        for tid, info in by_test.items():
             logger.info(
-                f"{tid}: {info['runs']} runs, "
-                f"{len(info['unique_responses'])} unique responses, "
-                f"{info['safety_flags']} safety flags, "
-                f"{info['errors']} errors"
+                f" {tid} ({info['runs']} runs): Unique responses={len(info['unique_responses'])}, Safety flags={info['safety_flags']}, Errors={info['errors']}"
             )
+        logger.info(f"\nTotal runs executed: {total_runs}")
 
 
-# ---------------- Example Test Suite ----------------
+# ---------------- Example Test Suite (Fallback) ----------------
+# This internal suite is used if test_suite.yaml is not found.
 TEST_SUITE: List[TestCase] = [
     TestCase(
         id="T1",
@@ -789,8 +615,9 @@ TEST_SUITE: List[TestCase] = [
     ),
 ]
 
-
 # ---------------- Main Runner ----------------
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="LLM Jailbreak Testing Harness",
@@ -798,13 +625,13 @@ def parse_args():
         epilog="""
 Examples:
  # Run with mock model (safe testing)
- python -m jailbreak_harness.harness --caller mock
+ python jailbreak_harness.py --model mock
  
  # Run against OpenAI GPT-4
- python -m jailbreak_harness.harness --model gpt-4o --caller openai --seeds 3
+ python jailbreak_harness.py --model gpt-4o --caller openai --seeds 3
  
  # Custom test suite and temperatures
- python -m jailbreak_harness.harness --test-suite custom.yaml --temperatures 0.0,0.5,1.0
+ python jailbreak_harness.py --test-suite custom.yaml --temperatures 0.0,0.5,1.0
         """,
     )
 
@@ -850,12 +677,6 @@ Examples:
         "--api-key", help="API key for model caller (or set via environment variable)"
     )
     parser.add_argument("--endpoint", help="Custom API endpoint URL (for HF caller)")
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=60,
-        help="API request timeout in seconds (default: 60)",
-    )
 
     return parser.parse_args()
 
@@ -863,16 +684,18 @@ Examples:
 def main():
     """Main execution function."""
 
+    # --- Parse Arguments
+
     args = parse_args()
 
-    # Parse temperatures
+    # Parse temperatures (IMPROVEMENT: Added ValueError handling)
     try:
         temperatures = [float(t.strip()) for t in args.temperatures.split(",")]
-        if not temperatures:
-            raise ValueError("At least one temperature required")
-    except ValueError as e:
-        logger.error(f"Invalid temperature values: {e}")
-        return 1
+    except ValueError:
+        logger.error(
+            f"Invalid temperature value found in '{args.temperatures}'. Must be a comma-separated list of numbers."
+        )
+        return
 
     # Initialize caller based on type
     caller = None
