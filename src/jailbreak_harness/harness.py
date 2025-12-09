@@ -1,5 +1,5 @@
 """
-jailbreak_harness.py
+harness.py
 Safety-first jailbreak test harness for LLM endpoints.
 
 Purpose:
@@ -43,7 +43,7 @@ if not logger.hasHandlers():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.FileHandler("jailbreak_harness.log", mode='w'), # Log to file (overwrite)
-            logging.StreamHandler()                                # Log to console
+            logging.StreamHandler()                                  # Log to console
         ]
     )
 
@@ -95,19 +95,16 @@ def load_test_suite_from_file(filepath: str) -> List[TestCase]:
                 ) for v_data in variants_data
             ]
             
-            # Combine core data with any extra metadata like category, tags, etc.
-            extra_meta = {k: v for k, v in tc_data.items() if k not in ["id", "name", "description", "variants"]}
-            
+            # Note: Extra metadata (category, tags, setup) is not stored directly in the TestCase 
+            # dataclass but is available in the result logging if desired. 
             test_case = TestCase(
                 id=tc_data["id"],
                 name=tc_data["name"],
                 description=tc_data["description"],
                 variants=variants
-                # Note: Extra metadata (category, tags, setup) is not stored directly in the TestCase 
-                # dataclass but is available in the result logging if desired. 
             )
             test_cases.append(test_case)
-        
+            
         logger.info(f"Successfully loaded {len(test_cases)} total test cases from {filepath}.")
         return test_cases
     except FileNotFoundError:
@@ -243,6 +240,7 @@ class HFModelCaller(BaseModelCaller):
         self.api_key = api_key or os.getenv("HF_API_KEY") 
     
     def call(self, model: str, prompt: str, system: Optional[str]=None, temperature: float=0.0) -> Dict[str, Any]:
+        # NOTE: Model arg is ignored here, as generic HF endpoints typically don't take a model arg.
         full_prompt = f"System: {system}\n\nUser: {prompt}" if system else prompt
         safe_temp = max(0.01, temperature)
         # Using a standard Inference API payload structure
@@ -263,10 +261,12 @@ class HFModelCaller(BaseModelCaller):
             return {"text": text, "tokens": tokens, "safety_flags": [], "meta": {}}
         
         except self.requests.exceptions.HTTPError as e:
-            logger.warning(f"HFModelCaller HTTPError: {e.response.status_code}")
+            # IMPROVEMENT: Use logger.exception for full traceback
+            logger.exception(f"HFModelCaller HTTPError: {e.response.status_code}")
             return self.format_error_response(f"HTTPError_{e.response.status_code}")
         except self.requests.exceptions.RequestException as e:
-            logger.warning(f"HFModelCaller RequestException: {e}")
+            # IMPROVEMENT: Use logger.exception for full traceback
+            logger.exception(f"HFModelCaller RequestException: {e}")
             return self.format_error_response(f"RequestException_{type(e).__name__}")
         except Exception:
             logger.exception("HFModelCaller unexpected error")
@@ -291,7 +291,7 @@ class JailbreakHarness:
         """Runs a single variant and records the result."""
         ts = datetime.utcnow().isoformat() + "Z"
         
-        # Determine the temperature for this specific run
+        # Determine the temperature for this specific run (should always be set by run_tests)
         temp_value = variant.temperature if variant.temperature is not None else 0.0
 
         try:
@@ -336,18 +336,26 @@ class JailbreakHarness:
         # Reset timestamp for a fresh run
         self._last_export_ts = None 
 
+        # --- IMPROVEMENT: Clearer variant flattening loop ---
+        # Flatten all test variants with effective temperature
+        variant_runs: List[Tuple[TestCase, Variant]] = []
+        for t in tests:
+            for v in t.variants:
+                # Determine the set of temperatures to run for this specific variant
+                # Use variant's temp if set, otherwise use the sweep temperatures
+                run_temps = [v.temperature] if v.temperature is not None else temperatures_to_run
+                
+                for temp in run_temps:
+                    # Create a new Variant instance with the resolved temperature
+                    variant_runs.append((
+                        t, 
+                        Variant(id=v.id, prompt=v.prompt, system_note=v.system_note, temperature=temp)
+                    ))
+        # --- END IMPROVEMENT ---
+
         for seed in range(seeds):
             random.seed(seed)
             logger.info(f"--- Starting test run with seed {seed} ---")
-            
-            # Flatten all test variants with effective temperature
-            variant_runs: List[Tuple[TestCase, Variant]] = [
-                (t, Variant(id=v.id, prompt=v.prompt, system_note=v.system_note, temperature=temp))
-                for t in tests
-                for v in t.variants
-                # Use variant's temp if set, otherwise use the sweep temperatures
-                for temp in ([v.temperature] if v.temperature is not None else temperatures_to_run)
-            ]
             
             # Run all variants for this seed with a progress bar
             for t, variant in tqdm(variant_runs, desc=f"Running variants (seed {seed})", unit="test"):
@@ -420,7 +428,8 @@ class JailbreakHarness:
             by_test.setdefault(tid, {"runs":0,"unique_responses":set(),"safety_flags":0,"errors":0})
             by_test[tid]["runs"] += 1
             by_test[tid]["unique_responses"].add(r["response"])
-            if r["safety_flags"]:
+            # SAFETY_FLAGS: check if the string contains any safety flags (which are comma-separated)
+            if r.get("safety_flags"): 
                 by_test[tid]["safety_flags"] += 1
             if "ERROR:" in r["response"]:
                 by_test[tid]["errors"] += 1
@@ -521,12 +530,6 @@ Examples:
     
     return parser.parse_args()
 
-def load_config(config_path='config.yaml'):
-    """Load configuration from YAML file."""
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    return {}
 
 def main():
     """Main execution function."""
@@ -535,8 +538,12 @@ def main():
 
     args = parse_args()
     
-    # Parse temperatures
-    temperatures = [float(t.strip()) for t in args.temperatures.split(',')]
+    # Parse temperatures (IMPROVEMENT: Added ValueError handling)
+    try:
+        temperatures = [float(t.strip()) for t in args.temperatures.split(',')]
+    except ValueError:
+        logger.error(f"Invalid temperature value found in '{args.temperatures}'. Must be a comma-separated list of numbers.")
+        return
     
     # Initialize caller based on type
     if args.caller == 'mock':
@@ -548,37 +555,29 @@ def main():
             logger.error("--endpoint required for HF caller")
             return
         caller = HFModelCaller(endpoint_url=args.endpoint, api_key=args.api_key)
-   
-    # --- Configuration ---
-    TEST_SUITE_FILE = "test_suite.yaml"
-    FILENAME_PREFIX = "jailbreak_results"
-    
-    # Default to Mock Caller for safe initial runs
-    # To use OpenAI, uncomment and provide API key or set OPENAI_API_KEY env var
-    # caller = OpenAIModelCaller(api_key="sk-...") 
-    # model_name = "gpt-4o"
-    caller = MockModelCaller()
-    model_name = "demo-model"
+    # CRITICAL FIX: The caller and model name initialized above will now be used.
+
     
     try:
         # --- Load Test Suite ---
-    if os.path.exists(args.test_suite):
-        test_suite = load_test_suite_from_file(args.test_suite)
-    else:
-        logger.warning(f"'{args.test_suite}' not found. Using internal fallback TEST_SUITE.")
-        test_suite = TEST_SUITE
-         
+        if os.path.exists(args.test_suite):
+            test_suite = load_test_suite_from_file(args.test_suite)
+        else:
+            logger.warning(f"'{args.test_suite}' not found. Using internal fallback TEST_SUITE.")
+            test_suite = TEST_SUITE
+            
         if not test_suite:
             logger.critical("No test cases loaded. Exiting.")
             return
         # --- End Load Test Suite ---
 
+        # Initialize Harness with argument-parsed parameters
         harness = JailbreakHarness(model_caller=caller, model_name=args.model)
         
-        logger.info(f"Running tests on model '{model_name}' using {type(caller).__name__}")
+        logger.info(f"Running tests on model '{args.model}' using {type(caller).__name__}")
         
-        # Run 2 seeds, testing temperatures 0.0 and 0.7 for variants that don't specify their own temp
-        harness.run_tests(test_suite, seeds=args.seeds, temperatures=temperatures, sleep=0.01)
+        # Run tests using the argument-parsed seeds, temperatures, and sleep
+        harness.run_tests(test_suite, seeds=args.seeds, temperatures=temperatures, sleep=args.sleep)
         
         # Export results to CSV and JSON with a single, matching timestamp
         harness.export_all(args.output_prefix)
