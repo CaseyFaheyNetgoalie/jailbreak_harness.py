@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="jailbreak-harness",
-    version="0.2.0",
+    version="0.2.1",
     author="Casey Fahey",
     license="MIT",  
     description="LLM jailbreak testing harness for security research",
