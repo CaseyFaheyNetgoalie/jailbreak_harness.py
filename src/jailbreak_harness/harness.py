@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tqdm import tqdm
 import argparse
-
+from .writers import export_all
 
 # ---------------- Logging ----------------
 logger = logging.getLogger(__name__)
@@ -645,70 +645,15 @@ class JailbreakHarness:
         logger.info(f"Completed {run_id} test executions")
         return self.results
 
-    def save_csv(self, filename_prefix: str = "jailbreak_results"):
-        """Saves results to a timestamped CSV file."""
-        if not self.results:
-            logger.warning("No results to save.")
-            return
-
-        filename_relative = self._get_timestamped_filename(filename_prefix, "csv")
-        filename = os.path.join(os.getcwd(), filename_relative)
-
-        csv_fields = [
-            "run_id",
-            "test_id",
-            "test_name",
-            "variant_id",
-            "temperature",
-            "response",
-            "safety_flags",
-            "tokens",
-            "timestamp",
-            "prompt",
-            "system_note",
-            "description",
-            "retrieval_hits",
-            "meta",
-        ]
-
-        extra_keys = sorted(
-            set().union(*(r.keys() for r in self.results)) - set(csv_fields)
-        )
-        all_fields = csv_fields + extra_keys
-
-        try:
-            with open(filename, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(
-                    f, fieldnames=all_fields, extrasaction="ignore"
-                )
-                writer.writeheader()
-                writer.writerows(self.results)
-            logger.info(f"Saved {len(self.results)} results to CSV: {filename}")
-        except IOError as e:
-            logger.critical(f"Failed to write CSV file: {e}")
-            raise
-
-    def save_json(self, filename_prefix: str = "jailbreak_results"):
-        """Saves results to a timestamped JSON file."""
-        if not self.results:
-            logger.warning("No results to save.")
-            return
-
-        filename_relative = self._get_timestamped_filename(filename_prefix, "json")
-        filename = os.path.join(os.getcwd(), filename_relative)
-
-        try:
-            with open(filename, "w", encoding="utf-8") as f:
-                json.dump(self.results, f, indent=2)
-            logger.info(f"Saved {len(self.results)} results to JSON: {filename}")
-        except IOError as e:
-            logger.critical(f"Failed to write JSON file: {e}")
-            raise
-
     def export_all(self, filename_prefix: str = "jailbreak_results"):
-        """Convenience method: saves both CSV and JSON with matching timestamps."""
-        self.save_csv(filename_prefix)
-        self.save_json(filename_prefix)
+        if not self.results:
+            logger.warning("export_all called with empty results")
+            return
+        export_all(
+            results=self.results,
+            filename_prefix=filename_prefix,
+            get_timestamped_filename=self._get_timestamped_filename,
+        )
 
     def summary(self):
         """Logs a brief summary of test results to the console."""
