@@ -1,0 +1,3 @@
+run_id,test_id,test_name,variant_id,temperature,response,safety_flags,tokens,timestamp,prompt,system_note,description,retrieval_hits,meta
+1,T1,N1,T1.v1,0.0,NO_BYPASS_DETECTED,,6,2025-12-09T20:12:49.918691Z,p1,,D1,[],{}
+2,T2,N2,T2.v1,0.5,NO_BYPASS_DETECTED,,6,2025-12-09T20:12:49.918784Z,p2,,D2,[],{}

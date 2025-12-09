@@ -29,7 +29,8 @@ import traceback
 import yaml
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+# FIX: Import UTC for timezone-aware datetime usage (removes DeprecationWarning)
+from datetime import datetime, UTC
 from tqdm import tqdm
 import argparse
 
@@ -43,7 +44,7 @@ if not logger.hasHandlers():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.FileHandler("jailbreak_harness.log", mode='w'), # Log to file (overwrite)
-            logging.StreamHandler()                                  # Log to console
+            logging.StreamHandler()                                # Log to console
         ]
     )
 
@@ -284,12 +285,14 @@ class JailbreakHarness:
     def _get_timestamped_filename(self, prefix: str, ext: str) -> str:
         """Generates a UTC timestamped filename and caches it for multiple exports."""
         if self._last_export_ts is None:
-            self._last_export_ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+            # FIX: Use datetime.now(UTC) to eliminate DeprecationWarning
+            self._last_export_ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         return f"{prefix}_{self._last_export_ts}.{ext}"
 
     def run_variant(self, test: TestCase, variant: Variant, run_id: int) -> Dict[str, Any]:
         """Runs a single variant and records the result."""
-        ts = datetime.utcnow().isoformat() + "Z"
+        # FIX: Use timezone-aware isoformat() to eliminate DeprecationWarning
+        ts = datetime.now(UTC).isoformat()
         
         # Determine the temperature for this specific run (should always be set by run_tests)
         temp_value = variant.temperature if variant.temperature is not None else 0.0
@@ -336,7 +339,6 @@ class JailbreakHarness:
         # Reset timestamp for a fresh run
         self._last_export_ts = None 
 
-        # --- IMPROVEMENT: Clearer variant flattening loop ---
         # Flatten all test variants with effective temperature
         variant_runs: List[Tuple[TestCase, Variant]] = []
         for t in tests:
@@ -351,7 +353,6 @@ class JailbreakHarness:
                         t, 
                         Variant(id=v.id, prompt=v.prompt, system_note=v.system_note, temperature=temp)
                     ))
-        # --- END IMPROVEMENT ---
 
         for seed in range(seeds):
             random.seed(seed)
@@ -371,8 +372,11 @@ class JailbreakHarness:
             logger.warning("No results to save.")
             return
         
-        filename = self._get_timestamped_filename(filename_prefix, "csv")
+        filename_relative = self._get_timestamped_filename(filename_prefix, "csv")
 
+        # FIX: Use os.path.join to ensure file is saved to CWD (or mocked CWD)
+        filename = os.path.join(os.getcwd(), filename_relative)
+        
         # Define strict order for common CSV columns
         csv_fields = [
             "run_id","test_id","test_name","variant_id","temperature",
@@ -401,7 +405,11 @@ class JailbreakHarness:
             logger.warning("No results to save.")
             return
         
-        filename = self._get_timestamped_filename(filename_prefix, "json")
+        filename_relative = self._get_timestamped_filename(filename_prefix, "json")
+        
+        # FIX: Use os.path.join to ensure file is saved to CWD (or mocked CWD)
+        filename = os.path.join(os.getcwd(), filename_relative)
+        
         try:
             with open(filename, "w", encoding="utf-8") as f:
                 # Dump the results list directly
@@ -470,14 +478,14 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run with mock model (safe testing)
-  python jailbreak_harness.py --model mock
-  
-  # Run against OpenAI GPT-4
-  python jailbreak_harness.py --model gpt-4o --caller openai --seeds 3
-  
-  # Custom test suite and temperatures
-  python jailbreak_harness.py --test-suite custom.yaml --temperatures 0.0,0.5,1.0
+ # Run with mock model (safe testing)
+ python jailbreak_harness.py --model mock
+ 
+ # Run against OpenAI GPT-4
+ python jailbreak_harness.py --model gpt-4o --caller openai --seeds 3
+ 
+ # Custom test suite and temperatures
+ python jailbreak_harness.py --test-suite custom.yaml --temperatures 0.0,0.5,1.0
         """
     )
     
@@ -546,17 +554,21 @@ def main():
         return
     
     # Initialize caller based on type
-    if args.caller == 'mock':
-        caller = MockModelCaller()
-    elif args.caller == 'openai':
-        caller = OpenAIModelCaller(api_key=args.api_key)
-    elif args.caller == 'hf':
-        if not args.endpoint:
-            logger.error("--endpoint required for HF caller")
-            return
-        caller = HFModelCaller(endpoint_url=args.endpoint, api_key=args.api_key)
-    # CRITICAL FIX: The caller and model name initialized above will now be used.
-
+    caller = None
+    try:
+        if args.caller == 'mock':
+            caller = MockModelCaller()
+        elif args.caller == 'openai':
+            caller = OpenAIModelCaller(api_key=args.api_key)
+        elif args.caller == 'hf':
+            if not args.endpoint:
+                logger.error("--endpoint required for HF caller")
+                return
+            caller = HFModelCaller(endpoint_url=args.endpoint, api_key=args.api_key)
+    except Exception as e:
+        logger.critical(f"Failed to initialize model caller '{args.caller}': {e}")
+        return
+        
     
     try:
         # --- Load Test Suite ---
