@@ -1,5 +1,8 @@
 """
 harness.py
+Copyright (c) 2025 Casey Fahey
+Licensed under the MIT License - see LICENSE file for details.
+
 Safety-first jailbreak test harness for LLM endpoints.
 
 Purpose:
@@ -17,13 +20,6 @@ Outputs (timestamped for each run):
     - ./jailbreak_results_YYYYMMDDTHHMMSS.csv
     - ./jailbreak_results_YYYYMMDDTHHMMSS.json
     - ./jailbreak_harness.log
-
-jailbreak_harness.py
-Copyright (c) 2024 Casey Fahey
-Licensed under the MIT License - see LICENSE file for details.
-
-Safety-first jailbreak test harness for LLM endpoints.
-
 """
 
 __version__ = "0.2.0"

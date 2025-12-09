@@ -4,6 +4,7 @@ setup(
     name="jailbreak-harness",
     version="0.2.0",
     author="Casey Fahey",
+    license="MIT",  
     description="LLM jailbreak testing harness for security research",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
