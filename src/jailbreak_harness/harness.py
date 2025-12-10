@@ -25,13 +25,12 @@ Outputs (timestamped for each run):
 __version__ = "0.2.1"
 
 import os
-import csv
-import json
 import time
 import random
 import logging
 import traceback
 import yaml
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +39,7 @@ import argparse
 from .writers import export_all
 from .callers import MockModelCaller, OpenAIModelCaller, HFModelCaller, BaseModelCaller
 from .datatypes import TestCase, Variant
+from .loader import load_test_suite_from_file
 
 # ---------------- Logging ----------------
 logger = logging.getLogger(__name__)
@@ -52,161 +52,7 @@ if not logger.hasHandlers():
             logging.StreamHandler(),
         ],
     )
-
-
-# ---------------- Data Classes ----------------
-@dataclass
-class Variant:
-    id: str
-    prompt: str
-    system_note: Optional[str] = None
-    temperature: Optional[float] = None
-
-    def __post_init__(self):
-        """Validate variant data after initialization."""
-        if not self.id or not isinstance(self.id, str):
-            raise ValueError(f"Variant id must be a non-empty string, got: {self.id}")
-        if not self.prompt or not isinstance(self.prompt, str):
-            raise ValueError(f"Variant prompt must be a non-empty string")
-        if self.temperature is not None:
-            if not isinstance(self.temperature, (int, float)):
-                raise ValueError(
-                    f"Temperature must be numeric, got: {type(self.temperature)}"
-                )
-            if not 0.0 <= self.temperature <= 2.0:
-                logger.warning(
-                    f"Temperature {self.temperature} outside typical range [0.0, 2.0]"
-                )
-
-
-@dataclass
-class TestCase:
-    id: str
-    name: str
-    description: str
-    variants: List[Variant]
-
-    def __post_init__(self):
-        """Validate test case data after initialization."""
-        if not self.id or not isinstance(self.id, str):
-            raise ValueError(f"TestCase id must be a non-empty string, got: {self.id}")
-        if not self.name or not isinstance(self.name, str):
-            raise ValueError(f"TestCase name must be a non-empty string")
-        if not self.variants or not isinstance(self.variants, list):
-            raise ValueError(f"TestCase must have at least one variant")
-        if not all(isinstance(v, Variant) for v in self.variants):
-            raise ValueError(f"All variants must be Variant instances")
-
-
-# ---------------- Test Suite Loader ----------------
-def load_test_suite_from_file(filepath: str) -> List[TestCase]:
-    """
-    Loads a test suite from a YAML or JSON file.
-    Supports a list at the root or a list under a 'tests' key.
-    
-    Args:
-        filepath: Path to the test suite file
-        
-    Returns:
-        List of TestCase objects
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist
-        ValueError: If file format is invalid
-    """
-    filepath_obj = Path(filepath)
-
-    if not filepath_obj.exists():
-        raise FileNotFoundError(f"Test suite file not found: {filepath}")
-
-    if not filepath_obj.is_file():
-        raise ValueError(f"Path is not a file: {filepath}")
-
-    logger.info(f"Loading test suite from {filepath}...")
-
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        if data is None:
-            raise ValueError("Test suite file is empty")
-
-        # Handle both root list and 'tests' key
-        test_list = data.get("tests", data) if isinstance(data, dict) else data
-
-        if not isinstance(test_list, list):
-            raise ValueError(
-                "Test suite file must contain a top-level list of test cases "
-                "or a 'tests' key containing a list."
-            )
-
-        if not test_list:
-            raise ValueError("Test suite contains no test cases")
-
-        test_cases = []
-        for idx, tc_data in enumerate(test_list):
-            try:
-                # Validate required fields
-                required_fields = ["id", "name", "description", "variants"]
-                missing_fields = [f for f in required_fields if f not in tc_data]
-                if missing_fields:
-                    raise KeyError(f"Missing required fields: {missing_fields}")
-
-                variants_data = tc_data.get("variants", [])
-                if not variants_data:
-                    logger.warning(
-                        f"Test case '{tc_data.get('id')}' has no variants, skipping"
-                    )
-                    continue
-
-                variants = []
-                for v_idx, v_data in enumerate(variants_data):
-                    try:
-                        variant = Variant(
-                            id=v_data["id"],
-                            prompt=v_data["prompt"],
-                            system_note=v_data.get("system_note")
-                            or v_data.get("system_prompt"),
-                            temperature=v_data.get("temperature"),
-                        )
-                        variants.append(variant)
-                    except (KeyError, ValueError) as e:
-                        logger.error(
-                            f"Error in variant {v_idx} of test '{tc_data.get('id')}': {e}"
-                        )
-                        raise
-
-                if not variants:
-                    logger.warning(
-                        f"Test case '{tc_data.get('id')}' has no valid variants, skipping"
-                    )
-                    continue
-
-                test_case = TestCase(
-                    id=tc_data["id"],
-                    name=tc_data["name"],
-                    description=tc_data["description"],
-                    variants=variants,
-                )
-                test_cases.append(test_case)
-
-            except Exception as e:
-                logger.error(f"Error loading test case at index {idx}: {e}")
-                raise
-
-        if not test_cases:
-            raise ValueError("No valid test cases could be loaded")
-
-        logger.info(f"Successfully loaded {len(test_cases)} test cases from {filepath}")
-        return test_cases
-
-    except yaml.YAMLError as e:
-        logger.error(f"Error parsing YAML file: {filepath}\n{e}")
-        raise
-    except Exception as e:
-        logger.error(f"Failed to load test suite from {filepath}: {e}")
-        raise
-
+                    
 # ---------------- Harness ----------------
 class JailbreakHarness:
     """Core harness to run test cases against a model caller."""

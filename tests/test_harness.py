@@ -4,12 +4,9 @@ import json
 import csv
 from unittest.mock import MagicMock, patch
 from jailbreak_harness.callers import MockModelCaller, OpenAIModelCaller, HFModelCaller
-from jailbreak_harness.harness import (
-    JailbreakHarness,
-    load_test_suite_from_file,
-)
+from jailbreak_harness.harness import JailbreakHarness
 from jailbreak_harness.datatypes import TestCase, Variant
-
+from jailbreak_harness.loader import load_test_suite_from_file
 
 # ----------------- FIX FOR PytestCollectionWarning -----------------
 # Explicitly tell pytest not to collect the imported data classes as test suites.

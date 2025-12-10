@@ -18,10 +18,9 @@ from .datatypes import (
 )
 
 
-from .harness import (
-    JailbreakHarness,
-    load_test_suite_from_file,
-)
+from .harness import JailbreakHarness
+
+from .loader import load_test_suite_from_file
 
 
 __all__ = [
