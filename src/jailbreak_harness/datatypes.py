@@ -1,70 +1,49 @@
-# jailbreak_harness/datatypes.py
-
+import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional
-import logging
+from typing import List, Dict, Any, Optional
 
-# Set up logging for validation warnings
-logger = logging.getLogger(__name__)
-
-
-# ---------------- Data Classes ----------------
-
-@dataclass
+@dataclass(frozen=True)
 class Variant:
-    """Represents a single attempt/prompt variant within a TestCase."""
-    id: str
-    prompt: str
-    system_note: Optional[str] = None
-    temperature: Optional[float] = None
+    """
+    Represents a single input variation within a TestCase.
+    """
+    # --- NON-DEFAULT FIELDS (Mandatory fields must come first) ---
+    prompt: str = field(metadata={'help': 'The main user prompt for the model.'})
     
-    # Optional fields for execution results (added for completeness, assuming they are used later)
-    result: dict = field(default_factory=dict)
-    meta: dict = field(default_factory=dict)
-
+    # --- DEFAULTED FIELDS (Must follow non-default fields) ---
+    id: str = field(default_factory=lambda: str(uuid.uuid4()), metadata={'help': 'Unique identifier for the variant.'})
+    system_note: Optional[str] = field(default=None, metadata={'help': 'System-level instruction or context for the model.'})
+    temperature: Optional[float] = field(default=None, metadata={'help': 'Sampling temperature for the model. None indicates a sweepable setting.'})
+    
+    # Fields to store results after execution (init=False)
+    result: Dict[str, Any] = field(default_factory=dict, init=False, metadata={'help': 'Storage for the final test result dictionary.'})
+    meta: Dict[str, Any] = field(default_factory=dict, init=False, metadata={'help': 'Storage for caller-specific metadata.'})
 
     def __post_init__(self):
-        """Validate variant data after initialization."""
-        if not self.id or not isinstance(self.id, str):
-            raise ValueError(f"Variant id must be a non-empty string, got: {self.id}")
-        if not self.prompt or not isinstance(self.prompt, str):
-            raise ValueError(f"Variant prompt must be a non-empty string")
-        
-        # Ensure temperature is either None or validated
-        if self.temperature is not None:
-            if not isinstance(self.temperature, (int, float)):
-                raise ValueError(
-                    f"Temperature must be numeric, got: {type(self.temperature)}"
-                )
-            if not 0.0 <= self.temperature <= 2.0:
-                logger.warning(
-                    f"Temperature {self.temperature} outside typical range [0.0, 2.0] for Variant ID: {self.id}"
-                )
+        """Perform validation after initialization."""
+        if not self.id:
+            # Note: This is mostly for safety if default_factory fails, but good practice.
+            raise ValueError("Variant id must be a non-empty string.")
+        if self.temperature is not None and not isinstance(self.temperature, (int, float)):
+             raise ValueError(f"Temperature must be numeric (int or float) or None. Found: {type(self.temperature)}")
 
 
-@dataclass
+@dataclass(frozen=True)
 class TestCase:
-    """A full test case containing multiple variants (e.g., different prompts)."""
-    id: str
-    name: str
-    description: str
-    variants: List[Variant]
+    """
+    Represents a full test case, containing one or more input variants.
+    """
+    # --- NON-DEFAULT FIELDS (Mandatory fields must come first) ---
+    name: str = field(metadata={'help': 'Human-readable name for the test case.'})
+    description: str = field(metadata={'help': 'Detailed description of the test case objective.'})
+    variants: List[Variant] = field(metadata={'help': 'List of input variations for this test case.'})
     
-    # Optional fields for test case metadata
-    tags: List[str] = field(default_factory=list)
-    expected_failure: bool = False
+    # --- DEFAULTED FIELDS ---
+    id: str = field(default_factory=lambda: str(uuid.uuid4()), metadata={'help': 'Unique identifier for the test case.'})
+    tags: List[str] = field(default_factory=list, metadata={'help': 'Categorization tags for the test case (e.g., "PII", "Do-Anything").'})
+    expected_failure: bool = field(default=False, metadata={'help': 'If True, this is a test case the model is expected to fail (i.e., a known jailbreak).'})
 
     def __post_init__(self):
-        """Validate test case data after initialization."""
-        if not self.id or not isinstance(self.id, str):
-            raise ValueError(f"TestCase id must be a non-empty string, got: {self.id}")
-        if not self.name or not isinstance(self.name, str):
-            raise ValueError(f"TestCase name must be a non-empty string")
-        if not self.variants or not isinstance(self.variants, list):
-            raise ValueError(f"TestCase must have at least one variant")
-        if not all(isinstance(v, Variant) for v in self.variants):
-            # Log the specific issue instead of just raising a generic error
-            invalid_variants = [type(v).__name__ for v in self.variants if not isinstance(v, Variant)]
-            raise ValueError(
-                f"All variants must be Variant instances. Found non-Variant types: {invalid_variants}"
-            )
+        """Perform validation after initialization."""
+        if not self.variants:
+            raise ValueError("TestCase must contain at least one variant.")
