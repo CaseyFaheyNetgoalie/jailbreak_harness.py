@@ -1,71 +1,81 @@
-# writers.py
+# src/jailbreak_harness/writers.py (Updated)
 
-import os
 import csv
 import json
 import logging
+import os
+from typing import List, Dict, Any
+
+# Import the utility function for consistent timestamped naming
+from .reporter import get_timestamped_filename # <--- NEW IMPORT
 
 logger = logging.getLogger(__name__)
 
-def write_csv(results, filename_prefix, get_timestamped_filename):
-    if not results:
-        logger.warning("No results to save.")
-        return
+# Define the standard fieldnames for CSV/JSON export
+FIELDNAMES = [
+    "run_id",
+    "test_id",
+    "test_name",
+    "description",
+    "variant_id",
+    "prompt",
+    "system_note",
+    "temperature",
+    "response",
+    "tokens",
+    "safety_flags",
+    "retrieval_hits",
+    "meta",
+    "timestamp",
+]
 
-    filename_relative = get_timestamped_filename(filename_prefix, "csv")
-    filename = os.path.join(os.getcwd(), filename_relative)
 
-    csv_fields = [
-        "run_id",
-        "test_id",
-        "test_name",
-        "variant_id",
-        "temperature",
-        "response",
-        "safety_flags",
-        "tokens",
-        "timestamp",
-        "prompt",
-        "system_note",
-        "description",
-        "retrieval_hits",
-        "meta",
-    ]
-
-    extra_keys = sorted(
-        set().union(*(r.keys() for r in results)) - set(csv_fields)
-    )
-    all_fields = csv_fields + extra_keys
-
+def save_json(results: List[Dict[str, Any]], filename_prefix: str, timestamp: str):
+    """
+    Saves results to a timestamped JSON file.
+    
+    Updated to use a pre-calculated timestamp for filename consistency.
+    """
+    # Use the shared utility to get the consistent filename
+    filename, _ = get_timestamped_filename(filename_prefix, "json", timestamp) # <--- USE TIMESTAMP
+    
+    output_path = os.path.join(os.getcwd(), filename)
+    
     try:
-        with open(filename, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=4)
+        logger.info(f"Results saved to JSON: {output_path}")
+    except Exception as e:
+        logger.error(f"Error writing JSON file {output_path}: {e}")
+
+
+def save_csv(results: List[Dict[str, Any]], filename_prefix: str, timestamp: str):
+    """
+    Saves results to a timestamped CSV file.
+
+    Updated to use a pre-calculated timestamp for filename consistency.
+    """
+    # Use the shared utility to get the consistent filename
+    filename, _ = get_timestamped_filename(filename_prefix, "csv", timestamp) # <--- USE TIMESTAMP
+
+    output_path = os.path.join(os.getcwd(), filename)
+    
+    try:
+        with open(output_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
             writer.writeheader()
             writer.writerows(results)
-        logger.info(f"Saved {len(results)} results to CSV: {filename}")
-    except IOError as e:
-        logger.critical(f"Failed to write CSV file: {e}")
-        raise
+        logger.info(f"Results saved to CSV: {output_path}")
+    except Exception as e:
+        logger.error(f"Error writing CSV file {output_path}: {e}")
 
 
-def write_json(results, filename_prefix, get_timestamped_filename):
-    if not results:
-        logger.warning("No results to save.")
-        return
-
-    filename_relative = get_timestamped_filename(filename_prefix, "json")
-    filename = os.path.join(os.getcwd(), filename_relative)
-
-    try:
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2)
-        logger.info(f"Saved {len(results)} results to JSON: {filename}")
-    except IOError as e:
-        logger.critical(f"Failed to write JSON file: {e}")
-        raise
-
-
-def export_all(results, filename_prefix, get_timestamped_filename):
-    write_csv(results, filename_prefix, get_timestamped_filename)
-    write_json(results, filename_prefix, get_timestamped_filename)
-
+def export_all(results: List[Dict[str, Any]], filename_prefix: str, timestamp: str):
+    """
+    Exports results to both CSV and JSON formats using the same timestamp.
+    
+    Updated to receive a pre-calculated timestamp from the harness.
+    """
+    # Note: We don't need to generate the timestamp here, we just pass it down.
+    save_json(results, filename_prefix, timestamp)
+    save_csv(results, filename_prefix, timestamp)
