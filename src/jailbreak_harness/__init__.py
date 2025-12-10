@@ -3,23 +3,33 @@
 
 __version__ = "0.2.1"
 
-from .harness import (
-    JailbreakHarness,
+
+from .callers import (
+    BaseModelCaller,
     MockModelCaller,
     OpenAIModelCaller,
     HFModelCaller,
-    BaseModelCaller,
+)
+
+
+from .datatypes import (
     TestCase,
     Variant,
+)
+
+
+from .harness import (
+    JailbreakHarness,
     load_test_suite_from_file,
 )
 
+
 __all__ = [
     "JailbreakHarness",
+    "BaseModelCaller",
     "MockModelCaller",
     "OpenAIModelCaller",
     "HFModelCaller",
-    "BaseModelCaller",
     "TestCase",
     "Variant",
     "load_test_suite_from_file",

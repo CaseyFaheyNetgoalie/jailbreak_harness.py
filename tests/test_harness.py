@@ -3,17 +3,13 @@ import os
 import json
 import csv
 from unittest.mock import MagicMock, patch
-
-# --- FIX: Import classes from the fully qualified module name ---
-# This path matches the structure: src/jailbreak_harness/harness.py
+from jailbreak_harness.callers import MockModelCaller, OpenAIModelCaller, HFModelCaller
 from jailbreak_harness.harness import (
-    MockModelCaller,
     JailbreakHarness,
-    TestCase,
-    Variant,
     load_test_suite_from_file,
-    BaseModelCaller,
 )
+from jailbreak_harness.datatypes import TestCase, Variant
+
 
 # ----------------- FIX FOR PytestCollectionWarning -----------------
 # Explicitly tell pytest not to collect the imported data classes as test suites.
@@ -249,7 +245,7 @@ class TestReportingAndExport:
     def test_save_json(self, tmp_path, harness_with_results):
         """Test JSON export content and filename consistency."""
         with patch("jailbreak_harness.harness.os.getcwd", return_value=str(tmp_path)):
-            harness_with_results.save_json("test_output")
+            harness_with_results.export_all("test_output")
 
             # The harness is expected to save the file into the mocked CWD (tmp_path)
             files = list(tmp_path.glob("test_output_*.json"))
@@ -265,7 +261,7 @@ class TestReportingAndExport:
     def test_save_csv(self, tmp_path, harness_with_results):
         """Test CSV export content and field order."""
         with patch("jailbreak_harness.harness.os.getcwd", return_value=str(tmp_path)):
-            harness_with_results.save_csv("test_output")
+            harness_with_results.export_all("test_output")
 
             files = list(tmp_path.glob("test_output_*.csv"))
             assert len(files) == 1
